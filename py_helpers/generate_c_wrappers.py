@@ -1,0 +1,408 @@
+#!/usr/bin/env python3
+"""
+generate_c_wrappers.py
+
+Read DIA-generated layout JSON and emit C wrappers (using cJSON) that
+serialize/deserialize the given root struct and any nested structs.
+
+Input JSON formats supported:
+
+A) Preferred multi-type map:
+{
+  "types": {
+    "Point": {
+      "kind": "struct",
+      "size": 8,
+      "fields": [
+        {"name":"x","type":"float","offset":0},
+        {"name":"y","type":"float","offset":4}
+      ]
+    },
+    "Size":  {...},
+    "Color": {"kind":"enum","underlying":"int"},
+    "myTestStruct": {
+      "kind":"struct",
+      "size": ...,
+      "fields":[
+        {"name":"center","type":"Point","offset":0},
+        {"name":"bounding","type":"Size","offset":8},
+        {"name":"color","type":"Color","offset":24},
+        {"name":"values","type":"float[5]","offset":28}
+      ]
+    }
+  }
+}
+
+B) Minimal single-struct (can pass multiple files to merge):
+{
+  "struct": "Point",
+  "size": 8,
+  "fields": [ ... ]
+}
+
+Usage:
+  python generate_c_wrappers.py --root myTestStruct \
+      --in layout_all.json \
+      --out-base myTestStruct_serial
+Example:
+    python generate_c_wrappers.py --root myTestStruct --in mystruct.json --out-base myTestStruct_serial
+
+Outputs:
+  <out-base>.h  and  <out-base>.c
+  (default base: "generated_json")
+"""
+
+import argparse
+import json
+import os
+import re
+from collections import OrderedDict, defaultdict, deque
+
+PRIMS = {"int", "unsigned int", "float", "double", "bool", "_Bool"}
+
+def parse_args():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in", dest="inputs", nargs="+", required=True,
+                    help="Input JSON file(s) from DIA layout (multi-type or single-struct).")
+    ap.add_argument("--root", required=False,
+                    help="Root struct name (defaults to only struct if unique).")
+    ap.add_argument("--out-base", default="generated_json",
+                    help="Basename for outputs (default: generated_json).")
+    return ap.parse_args()
+
+def load_json_auto(path):
+    # Minimal BOM detection
+    with open(path, "rb") as fb:
+        head = fb.read(4)
+    if head.startswith(b"\xEF\xBB\xBF"):
+        enc = "utf-8-sig"   # strip UTF-8 BOM
+    elif head.startswith(b"\xFF\xFE\x00\x00") or head.startswith(b"\x00\x00\xFE\xFF"):
+        enc = "utf-32"      # auto-handle BOM and endianness
+    elif head.startswith(b"\xFF\xFE") or head.startswith(b"\xFE\xFF"):
+        enc = "utf-16"      # auto-handle BOM and endianness
+    else:
+        enc = "utf-8"
+    with open(path, "r", encoding=enc) as fh:
+        return json.load(fh)
+
+def load_types(files):
+    types = OrderedDict()
+    for f in files:
+        data = load_json_auto(f)
+        if "types" in data:
+            for name, tdef in data["types"].items():
+                types[name] = tdef
+        elif "struct" in data and "fields" in data:
+            name = data["struct"]
+            tdef = {"kind": "struct", "size": data.get("size"), "fields": data["fields"]}
+            types[name] = tdef
+        else:
+            raise ValueError(f"{f}: JSON not recognized (needs 'types' or 'struct').")
+    for k, v in list(types.items()):
+        v.setdefault("kind", "struct")
+    return types
+
+def is_array_type(type_str):
+    # matches foo[5], char[32], Point[4], etc.
+    return bool(re.search(r"\[\s*\d+\s*\]$", type_str))
+
+def array_elem_and_count(type_str):
+    m = re.search(r"^(.*)\[\s*(\d+)\s*\]$", type_str)
+    if not m:
+        return None, None
+    elem = m.group(1).strip()
+    count = int(m.group(2))
+    return elem, count
+
+def is_char_array(type_str):
+    # strictly "char[N]"
+    elem, count = array_elem_and_count(type_str) if is_array_type(type_str) else (None, None)
+    return (elem == "char") and (count is not None)
+
+def is_char_ptr(type_str):
+    # "char*" or "char *"
+    return type_str.replace(" ", "") == "char*"
+
+def is_primitive(type_str):
+    return type_str in PRIMS
+
+def is_enum(types, type_str):
+    t = types.get(type_str)
+    return bool(t and t.get("kind") == "enum")
+
+def is_struct(types, type_str):
+    t = types.get(type_str)
+    return bool(t and t.get("kind") == "struct")
+
+def collect_struct_dependency_graph(types):
+    """
+    Build a graph of struct dependencies so we can order generation.
+    Only structs appear as graph nodes. Edges A->B when A has field of struct B or array of struct B.
+    """
+    graph = defaultdict(set)
+    for name, tdef in types.items():
+        if tdef.get("kind") != "struct":
+            continue
+        for fld in tdef.get("fields", []):
+            ftype = fld["type"]
+            base = ftype
+            if is_array_type(ftype):
+                base, _ = array_elem_and_count(ftype)
+            if is_struct(types, base):
+                graph[name].add(base)
+            else:
+                graph[name] = graph.get(name, set())  # ensure present
+    return graph
+
+def topo_order_structs(types, root=None):
+    """
+    Topologically order structs so that dependencies are emitted first.
+    If root provided, include only those reachable from root.
+    """
+    graph = collect_struct_dependency_graph(types)
+
+    # Limit to reachable if root specified
+    if root:
+        reachable = set()
+        q = deque([root])
+        while q:
+            cur = q.popleft()
+            if cur in reachable:
+                continue
+            reachable.add(cur)
+            for dep in graph.get(cur, []):
+                q.append(dep)
+        # Filter graph to reachable
+        graph = {k: {d for d in v if d in reachable} for k, v in graph.items() if k in reachable}
+
+    # Kahn's algorithm
+    indeg = {k: 0 for k in graph.keys()}
+    for k, vs in graph.items():
+        for v in vs:
+            indeg[v] = indeg.get(v, 0) + 1
+    q = deque([k for k, deg in indeg.items() if deg == 0])
+    order = []
+    while q:
+        n = q.popleft()
+        order.append(n)
+        for d in graph.get(n, []):
+            indeg[d] -= 1
+            if indeg[d] == 0:
+                q.append(d)
+
+    # There may be structs not in graph (no deps and not referenced)
+    # include them if root is None
+    if root is None:
+        rest = [k for k in types.keys() if types[k].get("kind") == "struct" and k not in order]
+        order.extend(rest)
+    return order
+
+def gen_decl_name(sname):  # function base names
+    return sname
+
+def emit_fn_decls(order):
+    out = []
+    out.append("/* Auto-generated: declarations */")
+    for sname in order:
+        out.append(f"void {sname}_to_json(const {sname} *s, cJSON *obj);")
+        out.append(f"void {sname}_from_json({sname} *s, const cJSON *obj);")
+        out.append("")
+    return "\n".join(out)
+
+def emit_to_json_for_field(types, fname, ftype):
+    code = []
+    # char[N] as string
+    if is_char_array(ftype):
+        code.append(f'    cJSON_AddStringToObject(obj, "{fname}", s->{fname});')
+        return code
+
+    # char* as string (nullable)
+    if is_char_ptr(ftype):
+        code.append(f'    cJSON_AddStringToObject(obj, "{fname}", s->{fname} ? s->{fname} : "");')
+        return code
+
+    # Array?
+    if is_array_type(ftype):
+        elem, count = array_elem_and_count(ftype)
+        code.append(f"    {{ cJSON *arr = cJSON_CreateArray();")
+        code.append(f"      for (int i = 0; i < {count}; ++i) {{")
+        if is_primitive(elem) or is_enum(types, elem):
+            # numbers/bools/enums
+            add = "Number" if elem in {"float", "double"} else "Number"  # cJSON only has Number
+            cast = "(double)" if elem in {"float", "double"} else ""
+            code.append(f"        cJSON_AddItemToArray(arr, cJSON_Create{add}({cast}s->{fname}[i]));")
+        elif is_struct(types, elem):
+            code.append(f"        cJSON *child = cJSON_CreateObject();")
+            code.append(f"        {elem}_to_json(&s->{fname}[i], child);")
+            code.append(f"        cJSON_AddItemToArray(arr, child);")
+        else:
+            code.append(f"        /* Unsupported array elem type: {elem} */")
+        code.append(f"      }}")
+        code.append(f'      cJSON_AddItemToObject(obj, "{fname}", arr); }}')
+        return code
+
+    # Primitive?
+    if is_primitive(ftype) or is_enum(types, ftype):
+        # bool/_Bool can still be emitted with Number; or use True/False
+        if ftype in {"bool", "_Bool"}:
+            code.append(f'    cJSON_AddBoolToObject(obj, "{fname}", s->{fname} ? 1 : 0);')
+        elif ftype in {"float", "double"}:
+            code.append(f'    cJSON_AddNumberToObject(obj, "{fname}", (double)s->{fname});')
+        else:
+            code.append(f'    cJSON_AddNumberToObject(obj, "{fname}", s->{fname});')
+        return code
+
+    # Nested struct?
+    if is_struct(types, ftype):
+        code.append(f"    {{ cJSON *child = cJSON_CreateObject();")
+        code.append(f"      {ftype}_to_json(&s->{fname}, child);")
+        code.append(f'      cJSON_AddItemToObject(obj, "{fname}", child); }}')
+        return code
+
+    code.append(f"    /* Unsupported field type: {ftype} */")
+    return code
+
+def emit_from_json_for_field(types, fname, ftype):
+    code = []
+    # char[N] as string
+    if is_char_array(ftype):
+        code.append(f'    {{ const cJSON *tmp = cJSON_GetObjectItem(obj, "{fname}");')
+        code.append(f"       if (tmp && cJSON_IsString(tmp) && tmp->valuestring) {{")
+        code.append(f"           strncpy(s->{fname}, tmp->valuestring, sizeof(s->{fname}) - 1);")
+        code.append(f"           s->{fname}[sizeof(s->{fname}) - 1] = '\\0';")
+        code.append(f"       }} }}")
+        return code
+
+    # char* as string
+    if is_char_ptr(ftype):
+        code.append(f'    {{ const cJSON *tmp = cJSON_GetObjectItem(obj, "{fname}");')
+        code.append(f"       if (tmp && cJSON_IsString(tmp) && tmp->valuestring) {{")
+        code.append(f"           /* NOTE: caller should free previous pointer if needed */")
+        code.append(f"           s->{fname} = _strdup(tmp->valuestring);")
+        code.append(f"       }} }}")
+        return code
+
+    # Array?
+    if is_array_type(ftype):
+        elem, count = array_elem_and_count(ftype)
+        code.append(f'    {{ const cJSON *arr = cJSON_GetObjectItem(obj, "{fname}");')
+        code.append(f"       if (arr && cJSON_IsArray(arr)) {{")
+        code.append(f"           int idx = 0;")
+        code.append(f"           cJSON *el = NULL;")
+        code.append(f"           cJSON_ArrayForEach(el, arr) {{")
+        code.append(f"               if (idx >= {count}) break;")
+        if is_primitive(elem) or is_enum(types, elem):
+            if elem in {"float", "double"}:
+                code.append(f"               s->{fname}[idx++] = (float)el->valuedouble;" if elem == "float" else
+                            f"               s->{fname}[idx++] = (double)el->valuedouble;")
+            elif elem in {"bool", "_Bool"}:
+                code.append(f"               s->{fname}[idx++] = (el->type == cJSON_True) ? 1 : (el->valueint != 0);")
+            else:
+                code.append(f"               s->{fname}[idx++] = el->valueint;")
+        elif is_struct(types, elem):
+            code.append(f"               if (cJSON_IsObject(el)) {elem}_from_json(&s->{fname}[idx++], el);")
+        else:
+            code.append(f"               /* Unsupported array elem type: {elem} */")
+        code.append(f"           }}")
+        code.append(f"       }} }}")
+        return code
+
+    # Primitive / enum?
+    if is_primitive(ftype) or is_enum(types, ftype):
+        code.append(f'    {{ const cJSON *tmp = cJSON_GetObjectItem(obj, "{fname}");')
+        code.append(f"       if (tmp) {{")
+        if ftype in {"float", "double"}:
+            cast = "(float)" if ftype == "float" else "(double)"
+            code.append(f"           s->{fname} = {cast}tmp->valuedouble;")
+        elif ftype in {"bool", "_Bool"}:
+            code.append(f"           s->{fname} = (tmp->type == cJSON_True) ? 1 : (tmp->valueint != 0);")
+        else:
+            code.append(f"           s->{fname} = tmp->valueint;")
+        code.append(f"       }} }}")
+        return code
+
+    # Nested struct?
+    if is_struct(types, ftype):
+        code.append(f'    {{ const cJSON *child = cJSON_GetObjectItem(obj, "{fname}");')
+        code.append(f"       if (child && cJSON_IsObject(child)) {ftype}_from_json(&s->{fname}, child); }}")
+        return code
+
+    code.append(f"    /* Unsupported field type: {ftype} */")
+    return code
+
+def emit_struct_impl(types, sname):
+    tdef = types[sname]
+    fields = tdef.get("fields", [])
+    lines = []
+    # to_json
+    lines.append(f"void {sname}_to_json(const {sname} *s, cJSON *obj) {{")
+    for fld in fields:
+        lines.extend(emit_to_json_for_field(types, fld['name'], fld['type']))
+    lines.append("}\n")
+    # from_json
+    lines.append(f"void {sname}_from_json({sname} *s, const cJSON *obj) {{")
+    for fld in fields:
+        lines.extend(emit_from_json_for_field(types, fld['name'], fld['type']))
+    lines.append("}\n")
+    return "\n".join(lines)
+
+def main():
+    args = parse_args()
+    types = load_types(args.inputs)
+
+    # determine root
+    root = args.root
+    if not root:
+        # if exactly one struct, use it
+        structs = [k for k, v in types.items() if v.get("kind") == "struct"]
+        if len(structs) == 1:
+            root = structs[0]
+        else:
+            raise SystemExit("Please pass --root <StructName> (multiple structs present).")
+
+    if root not in types or types[root].get("kind") != "struct":
+        raise SystemExit(f"--root {root} is not a struct present in input types.")
+
+    # Order structs so nested deps are emitted first (and declared)
+    order = topo_order_structs(types, root=root)
+    # ensure root is last (user expects the root at end)
+    order = [s for s in order if s != root] + [root]
+
+    base = args.out_base
+    h_path = f"{base}.h"
+    c_path = f"{base}.c"
+
+    # Emit header
+    h = []
+    h.append("#pragma once")
+    h.append("#include <cjson/cJSON.h>")
+    h.append("#include <string.h>")
+    h.append("")
+    h.append("/* Auto-generated by generate_c_wrappers_from_layout.py */")
+    h.append("")
+    # forward decls for all
+    h.append(emit_fn_decls(order))
+
+    with open(h_path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(h) + "\n")
+
+    # Emit impl
+    c = []
+    c.append("/* Auto-generated by generate_c_wrappers_from_layout.py */")
+    c.append('#include "')
+    c.append(os.path.basename(h_path))
+    c.append('"')
+    c.append("")
+    for sname in order:
+        c.append(emit_struct_impl(types, sname))
+
+    with open(c_path, "w", encoding="utf-8") as fc:
+        fc.write("\n".join(c) + "\n")
+
+    print(f"Wrote: {h_path}, {c_path}")
+    print("Structs emitted (dependency order):")
+    for s in order:
+        print("  -", s)
+
+if __name__ == "__main__":
+    main()

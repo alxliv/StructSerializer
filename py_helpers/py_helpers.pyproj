@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>f928934f-30a0-4f73-b67c-3487eea21342</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>extract_layout.py</StartupFile>
+    <StartupFile>generate_c_wrappers.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -13,7 +13,7 @@
     <RootNamespace>py_helpers</RootNamespace>
     <InterpreterId>MSBuild|env|$(MSBuildProjectFullPath)</InterpreterId>
     <LaunchProvider>Standard Python launcher</LaunchProvider>
-    <CommandLineArguments>..\x64\Debug\mytest.pdb myTestStruct</CommandLineArguments>
+    <CommandLineArguments>--root myTestStruct --in mystruct.json --out-base myTestStruct_serial</CommandLineArguments>
     <EnableNativeCodeDebugging>False</EnableNativeCodeDebugging>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
@@ -26,6 +26,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="extract_layout.py" />
+    <Compile Include="generate_c_wrappers.py">
+      <SubType>Code</SubType>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <Interpreter Include="env\">
