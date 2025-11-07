@@ -123,9 +123,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="..\cJSON\cJSON.c" />
+    <ClCompile Include="..\py_helpers\myTestStruct_serial.c" />
     <ClCompile Include="mytest.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\cJSON\cJSON.h" />
     <ClInclude Include="mytypes.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

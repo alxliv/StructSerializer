@@ -18,9 +18,18 @@
     <ClCompile Include="mytest.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\py_helpers\myTestStruct_serial.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\cJSON\cJSON.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="mytypes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\cJSON\cJSON.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
