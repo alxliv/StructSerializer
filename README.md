@@ -8,30 +8,30 @@ StructSerializer extracts C++ struct layout information from PDB files using the
 
 ## Features
 
-- ?? **Automatic Type Discovery** - Extracts struct layouts, nested dependencies, and enums from PDB files
-- ?? **Full Type Support** - Handles primitives, arrays, nested structs, enums, and pointers
-- ?? **Dependency Resolution** - Automatically includes all dependent types in topological order
-- ?? **Type-Safe Generation** - Generates strongly-typed C functions for each struct
-- ?? **Multi-Format JSON Input** - Supports both single-struct and multi-type JSON formats
-- ?? **Encoding-Aware** - Automatically detects and handles UTF-8, UTF-16, and UTF-32 encoded files
+- **Automatic Type Discovery** - Extracts struct layouts, nested dependencies, and enums from PDB files
+- **Full Type Support** - Handles primitives, arrays, nested structs, enums, and pointers
+- **Dependency Resolution** - Automatically includes all dependent types in topological order
+- **Type-Safe Generation** - Generates strongly-typed C functions for each struct
+- **Multi-Format JSON Input** - Supports both single-struct and multi-type JSON formats
+- **Encoding-Aware** - Automatically detects and handles UTF-8, UTF-16, and UTF-32 encoded files
 
 ## Project Structure
 
 ```
 StructSerializer/
-??? py_helpers/
-?   ??? extract_layout.py  # Extract struct info from PDB files
-?   ??? generate_c_wrappers.py    # Generate C serialization code
-??? mytest/
-?   ??? mytypes.h        # Example C++ struct definitions
-?   ??? mytest.cpp      # Example usage
-??? README.md
+|-- py_helpers/
+| |-- extract_layout.py # Extract struct info from PDB files
+| |-- generate_c_wrappers.py # Generate C serialization code
+|-- mytest/
+| |-- mytypes.h # Example C++ struct definitions
+| |-- mytest.cpp # Example usage
+|-- README.md
 ```
 
 ## Prerequisites
 
 ### Python Dependencies
-- Python 3.6+
+- Python3.6+
 - `pydia2` - DIA SDK Python bindings for PDB parsing
 
 Install with:
@@ -40,46 +40,51 @@ pip install pydia2
 ```
 
 ### C/C++ Dependencies
-- Visual Studio 2015+ (for C++14 support and PDB generation)
+- Visual Studio2015+ (for C++14 support and PDB generation)
 - [cJSON library](https://github.com/DaveGamble/cJSON) for JSON operations
 
 ## Quick Start
 
-### 1. Define Your Structs
+###1. Define Your Structs
 
 Create your C++ structures with nested types and enums:
 
-```cpp
+```c
 // mytypes.h
 typedef enum {
-    COLOR_RED,
-    COLOR_GREEN,
-    COLOR_BLUE
+ COLOR_RED,
+ COLOR_GREEN,
+ COLOR_BLUE
 } Color;
 
 typedef struct {
-    float x;
-    float y;
+ float x;
+ float y;
 } Point;
 
 typedef struct {
-    Point center;
-    Size bounding;
-    Color color;
-    float values[5];
+ double width;
+ double height;
+} Size;
+
+typedef struct {
+ Point center;
+ Size bounding;
+ Color color;
+ float values[5];
 } myTestStruct;
 ```
 
-### 2. Compile with Debug Symbols
+###2. Compile with Debug Symbols
 
 Build your C++ code with debug information enabled to generate a PDB file:
 
 ```bash
 # Visual Studio: Build in Debug mode or with /Zi flag
-cl /Zi mytest.cpp
+cl /Zi /EHsc mytest\mytest.cpp /Fo:mytest.obj /Fe:mytest.exe
 ```
 
-### 3. Extract Struct Layout
+###3. Extract Struct Layout
 
 Use `extract_layout.py` to parse the PDB and extract struct information:
 
@@ -87,34 +92,9 @@ Use `extract_layout.py` to parse the PDB and extract struct information:
 python py_helpers/extract_layout.py x64/Debug/mytest.pdb myTestStruct > mystruct.json
 ```
 
-This generates a JSON file containing the complete type information:
+This generates a JSON file containing the complete type information (multi-type example shown below).
 
-```json
-{
-  "types": {
-    "Point": {
-      "kind": "struct",
-      "size": 8,
-      "fields": [
-        {"name": "x", "type": "float", "offset": 0},
-     {"name": "y", "type": "float", "offset": 4}
-      ]
-    },
-    "myTestStruct": {
-      "kind": "struct",
-      "size": 48,
-      "fields": [
-        {"name": "center", "type": "Point", "offset": 0},
-      {"name": "bounding", "type": "Size", "offset": 8},
-        {"name": "color", "type": "Color", "offset": 24},
-      {"name": "values", "type": "float[5]", "offset": 28}
-      ]
-    }
-  }
-}
-```
-
-### 4. Generate Serialization Code
+###4. Generate Serialization Code
 
 Use `generate_c_wrappers.py` to create the serialization functions:
 
@@ -126,29 +106,38 @@ This generates two files:
 - `myTestStruct_serial.h` - Function declarations
 - `myTestStruct_serial.c` - Function implementations
 
-### 5. Use in Your Code
+###5. Use in Your Code
 
 Include the generated files and use the serialization functions:
 
 ```c
 #include "myTestStruct_serial.h"
+#include <cjson/cJSON.h>
+#include <stdio.h>
 
-// Serialize struct to JSON
-myTestStruct s = { /* ... */ };
-cJSON *root = cJSON_CreateObject();
-myTestStruct_to_json(&s, root);
-char *json_str = cJSON_Print(root);
-printf("%s\n", json_str);
+int main() {
+ myTestStruct s = {0};
+ s.center.x =1.0f;
+ s.center.y =2.0f;
+ s.bounding.width =3.0;
+ s.bounding.height =4.0;
+ s.color = COLOR_GREEN;
+ s.values[0] =0.1f;
 
-// Deserialize JSON to struct
-myTestStruct s2;
-cJSON *parsed = cJSON_Parse(json_str);
-myTestStruct_from_json(&s2, parsed);
+ cJSON *root = cJSON_CreateObject();
+ myTestStruct_to_json(&s, root);
+ char *json_str = cJSON_Print(root);
+ printf("%s\n", json_str);
 
-// Cleanup
-cJSON_Delete(root);
-cJSON_Delete(parsed);
-free(json_str);
+ myTestStruct s2 = {0};
+ cJSON *parsed = cJSON_Parse(json_str);
+ myTestStruct_from_json(&s2, parsed);
+
+ cJSON_Delete(root);
+ cJSON_Delete(parsed);
+ free(json_str);
+ return0;
+}
 ```
 
 ## Command-Line Reference
@@ -172,12 +161,12 @@ python extract_layout.py <pdb_path> <struct_name>
 Generates C serialization wrapper code from struct layout JSON.
 
 ```bash
-python generate_c_wrappers.py --root <struct> --in <json_file> --out-base <basename>
+python generate_c_wrappers.py --root <struct> --in <json_file> [<json_file2> ...] --out-base <basename>
 ```
 
 **Arguments:**
 - `--root <struct>` - Root struct name (optional if only one struct in JSON)
-- `--in <json_file>` - Input JSON file(s) with struct layouts (can specify multiple)
+- `--in <json_file>` - Input JSON file(s) with struct layouts
 - `--out-base <basename>` - Output file basename (default: `generated_json`)
 
 **Output:** Generates `<basename>.h` and `<basename>.c`
@@ -186,25 +175,56 @@ python generate_c_wrappers.py --root <struct> --in <json_file> --out-base <basen
 
 | Category | Types | Notes |
 |----------|-------|-------|
-| **Primitives** | `int`, `unsigned int`, `float`, `double`, `bool`, `_Bool` | Serialized as JSON numbers/booleans |
-| **Strings** | `char[N]`, `char*` | Handled as JSON strings |
-| **Arrays** | `T[N]` | Fixed-size arrays of any supported type |
-| **Enums** | User-defined | Serialized as integers |
-| **Structs** | Nested structs | Recursively serialized as JSON objects |
-| **Pointers** | `T*` | Limited support; `char*` for strings |
+| **Primitives** | `int`, `unsigned int`, `float`, `double`, `bool`, `_Bool` | Serialized as numbers / bools |
+| **Strings** | `char[N]`, `char*` | Fixed buffer or pointer (caller owns `char*`) |
+| **Arrays** | `T[N]` | Fixed-size arrays of supported element types |
+| **Enums** | User-defined | Serialized as underlying integer |
+| **Structs** | Nested structs | Recursively serialized objects |
+| **Pointers** | `char*` | Other pointers not expanded |
 
 ## JSON Input Formats
-
-The tool supports two JSON input formats:
 
 ### Multi-Type Format (Recommended)
 
 ```json
 {
-  "types": {
-    "TypeName1": { "kind": "struct", "size": 16, "fields": [...] },
-    "TypeName2": { "kind": "enum", "underlying": "int", "values": [...] }
-  }
+ "types": {
+ "Point": {
+ "kind": "struct",
+ "size":8,
+ "fields": [
+ {"name": "x", "type": "float", "offset":0},
+ {"name": "y", "type": "float", "offset":4}
+ ]
+ },
+ "Size": {
+ "kind": "struct",
+ "size":16,
+ "fields": [
+ {"name": "width", "type": "double", "offset":0},
+ {"name": "height", "type": "double", "offset":8}
+ ]
+ },
+ "Color": {
+ "kind": "enum",
+ "underlying": "int",
+ "values": [
+ {"name": "COLOR_RED", "value":0},
+ {"name": "COLOR_GREEN", "value":1},
+ {"name": "COLOR_BLUE", "value":2}
+ ]
+ },
+ "myTestStruct": {
+ "kind": "struct",
+ "size":48,
+ "fields": [
+ {"name": "center", "type": "Point", "offset":0},
+ {"name": "bounding", "type": "Size", "offset":8},
+ {"name": "color", "type": "Color", "offset":24},
+ {"name": "values", "type": "float[5]", "offset":28}
+ ]
+ }
+ }
 }
 ```
 
@@ -212,20 +232,21 @@ The tool supports two JSON input formats:
 
 ```json
 {
-  "struct": "TypeName",
-  "size": 16,
-  "fields": [...]
+ "struct": "Point",
+ "size":8,
+ "fields": [
+ {"name": "x", "type": "float", "offset":0},
+ {"name": "y", "type": "float", "offset":4}
+ ]
 }
 ```
 
 ## Encoding Support
 
-The tool automatically detects file encoding:
-- **UTF-8** (with or without BOM)
-- **UTF-16 LE/BE** (with BOM)
-- **UTF-32 LE/BE** (with BOM)
-
-This ensures compatibility with JSON files generated by various tools and editors.
+Automatically detects file encoding:
+- UTF-8 (with or without BOM)
+- UTF-16 LE/BE (with BOM)
+- UTF-32 LE/BE (with BOM)
 
 ## Advanced Usage
 
@@ -234,55 +255,47 @@ This ensures compatibility with JSON files generated by various tools and editor
 Merge type definitions from multiple JSON files:
 
 ```bash
-python generate_c_wrappers.py --in types1.json types2.json types3.json --root MyStruct --out-base combined
+python py_helpers/generate_c_wrappers.py --in core.json extras.json more.json --root myTestStruct --out-base combined
 ```
 
 ### Partial Type Extraction
 
-Generate code for only specific types and their dependencies by specifying `--root`:
+Generate code for a subset rooted at a struct:
 
 ```bash
-python generate_c_wrappers.py --root Point --in alltypes.json --out-base point_only
+python py_helpers/generate_c_wrappers.py --in all_types.json --root Point --out-base point_only
 ```
 
 ## Troubleshooting
 
-### Common Issues
+**Problem:** `UnicodeDecodeError` reading JSON
 
-**Problem:** `UnicodeDecodeError` when reading JSON files
+**Solution:** Ensure file is saved in a supported encoding; auto-detection strips BOM.
 
-**Solution:** The tool now automatically detects encoding. If issues persist, ensure your JSON file is saved in UTF-8, UTF-16, or UTF-32 format.
+**Problem:** Struct not found in PDB
 
----
-
-**Problem:** "Struct not found in PDB"
-
-**Solution:** Ensure you're building with debug symbols (`/Zi` flag) and the struct name matches exactly (case-sensitive).
-
----
+**Solution:** Build with debug symbols (`/Zi`) and verify struct name spelling.
 
 **Problem:** Missing nested type definitions
 
-**Solution:** The tool automatically includes dependencies. Ensure all types are defined in the PDB or provide multiple input JSON files.
+**Solution:** Use multi-type JSON produced by `extract_layout.py` or merge multiple JSON inputs.
 
 ## Contributing
 
-Contributions are welcome! Areas for improvement:
-- Support for unions
-- Better pointer type handling
-- Additional output formats (XML, Protocol Buffers, etc.)
-- Performance optimizations for large struct hierarchies
+Potential improvements:
+- Union support
+- Pointer graph expansion options
+- Additional output targets (XML, YAML, protobuf)
+- Performance tuning for very large type graphs
 
 ## License
 
-This project is provided as-is for educational and commercial use.
+Provided as-is for educational and commercial use.
 
 ## Acknowledgments
 
-- Uses Microsoft's Debug Interface Access (DIA) SDK
-- Integrates with [cJSON](https://github.com/DaveGamble/cJSON) by Dave Gamble
-- Inspired by the need for automatic serialization in C++ projects
+- Microsoft DIA SDK
+- Dave Gamble's cJSON library
 
 ---
 
-**Built with ?? for developers tired of writing serialization boilerplate**
