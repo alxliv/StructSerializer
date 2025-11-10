@@ -5,8 +5,6 @@ VisualStudioVersion = 17.14.36623.8
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "mytest", "mytest\mytest.vcxproj", "{28D0757F-E8B4-4C58-BCC2-01C8EE55BC38}"
 EndProject
-Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "py_helpers", "py_helpers\py_helpers.pyproj", "{F928934F-30A0-4F73-B67C-3487EEA21342}"
-EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8EC462FD-D22E-90A8-E5CE-7E832BA40C5D}"
 	ProjectSection(SolutionItems) = preProject
 		README.md = README.md
@@ -34,12 +32,6 @@ Global
 		{28D0757F-E8B4-4C58-BCC2-01C8EE55BC38}.Release|x64.Build.0 = Release|x64
 		{28D0757F-E8B4-4C58-BCC2-01C8EE55BC38}.Release|x86.ActiveCfg = Release|Win32
 		{28D0757F-E8B4-4C58-BCC2-01C8EE55BC38}.Release|x86.Build.0 = Release|Win32
-		{F928934F-30A0-4F73-B67C-3487EEA21342}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{F928934F-30A0-4F73-B67C-3487EEA21342}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{F928934F-30A0-4F73-B67C-3487EEA21342}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{F928934F-30A0-4F73-B67C-3487EEA21342}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{F928934F-30A0-4F73-B67C-3487EEA21342}.Release|x64.ActiveCfg = Release|Any CPU
-		{F928934F-30A0-4F73-B67C-3487EEA21342}.Release|x86.ActiveCfg = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

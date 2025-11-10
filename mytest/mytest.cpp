@@ -4,8 +4,8 @@
 #include <iostream>
 #include <cassert>
 #include <cmath>
-#include "../py_helpers/myTestStruct_serial.h"
-#include "../cJSON/cJSON.h"
+#include "..\py_helpers/out/myTestStruct_serial.h"
+#include "cJSON.h"
 
 static inline bool feqf(float a, float b, float eps =1e-6f) {
     return std::fabs(a - b) <= eps;
