@@ -29,14 +29,16 @@ def _dia_tag(name: str, fallback: int) -> int:
 	try:
 		# If it's already an Enum member (e.g., SymTagEnum.SymTagEnum)
 		if isinstance(val, enum.Enum):
-			return int(val)
+			return int(val.value)
 		# If it's an Enum class (EnumType), fetch member with same name
 		if isinstance(val, type) and issubclass(val, enum.Enum):
 			member = getattr(val, name, None)
 			if member is not None:
-				return int(member)
+				return int(member.value)
 		# Else try to coerce to int directly (covers plain ints)
-		return int(val)
+		if isinstance(val, int):
+			return val
+		return fallback
 	except Exception:
 		return fallback
 
@@ -48,17 +50,31 @@ SYM_TAG_ARRAY_TYPE = _dia_tag("SymTagArrayType",8)
 SYM_TAG_TYPEDEF = _dia_tag("SymTagTypedef",13)
 SYM_TAG_POINTER_TYPE = _dia_tag("SymTagPointerType",14)
 
+
+def _bt(name: str, fallback: int) -> int:
+	"""Return an int basic type value robustly across pydia2 variants."""
+	val = getattr(pydia2.dia, name, None)
+	if val is None:
+		return fallback
+	try:
+		if isinstance(val, enum.Enum):
+			return int(val.value)
+		return int(val)
+	except Exception:
+		return fallback
+
+
 BT_MAP = {
-	getattr(pydia2.dia, "btVoid",1): "void",
-	getattr(pydia2.dia, "btChar",2): "char",
-	getattr(pydia2.dia, "btWChar",3): "wchar_t",
-	getattr(pydia2.dia, "btInt",6): "int",
-	getattr(pydia2.dia, "btUInt",7): "unsigned int",
-	getattr(pydia2.dia, "btFloat",8): "float",
-	getattr(pydia2.dia, "btBool",10): "bool",
-	getattr(pydia2.dia, "btLong",13): "long",
-	getattr(pydia2.dia, "btULong",14): "unsigned long",
-	getattr(pydia2.dia, "btDouble",16): "double",
+	_bt("btVoid",1): "void",
+	_bt("btChar",2): "char",
+	_bt("btWChar",3): "wchar_t",
+	_bt("btInt",6): "int",
+	_bt("btUInt",7): "unsigned int",
+	_bt("btFloat",8): "float",
+	_bt("btBool",10): "bool",
+	_bt("btLong",13): "long",
+	_bt("btULong",14): "unsigned long",
+	_bt("btDouble",16): "double",
 }
 
 
