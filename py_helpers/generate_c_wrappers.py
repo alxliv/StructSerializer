@@ -58,7 +58,7 @@ import os
 import re
 from collections import OrderedDict, defaultdict, deque
 
-PRIMS = {"int", "unsigned int", "float", "double", "bool", "_Bool"}
+PRIMS = {"int", "unsigned int", "unsigned long", "float", "double", "bool", "_Bool"}
 
 
 def parse_args():
