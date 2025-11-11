@@ -219,6 +219,7 @@ def emit_header_decls_for_root(root):
     out.append("/* Auto-generated: public API (root only) */")
     out.append(f"void {root}_to_json(const {root} *s, cJSON *obj);")
     out.append(f"void {root}_from_json({root} *s, const cJSON *obj);")
+    out.append(f"int {root}_equals(const {root} *a, const {root} *b);")
     out.append("")
     return "\n".join(out)
 
@@ -354,20 +355,70 @@ def emit_from_json_for_field(types, fname, ftype):
     return code
 
 
+def emit_equals_for_field(types, fname, ftype):
+    code = []
+    if is_char_array(ftype):
+        code.append(f"\tif (memcmp(a->{fname}, b->{fname}, sizeof(a->{fname})) != 0) return 0;")
+        return code
+
+    if is_char_ptr(ftype):
+        code.append(f"\tif ((a->{fname} ?1:0) != (b->{fname} ?1:0)) return 0;")
+        code.append(f"\tif (a->{fname} && strcmp(a->{fname}, b->{fname}) != 0) return 0;")
+        return code
+
+    if is_array_type(ftype):
+        elem, count = array_elem_and_count(ftype)
+        code.append(f"\tfor (int i = 0; i < {count}; ++i) {{")
+        if is_primitive(elem) or is_enum(types, elem):
+            if elem in {"bool", "_Bool"}:
+                code.append(f"\t\tif ((a->{fname}[i] ?1:0) != (b->{fname}[i] ?1:0)) return 0;")
+            else:
+                code.append(f"\t\tif (a->{fname}[i] != b->{fname}[i]) return 0;")
+        elif is_struct(types, elem):
+            code.append(f"\t\tif (!{elem}_equals(&a->{fname}[i], &b->{fname}[i])) return 0;")
+        else:
+            code.append(f"\t\t/* Unsupported array elem type: {elem} */")
+        code.append("\t}")
+        return code
+
+    if is_primitive(ftype) or is_enum(types, ftype):
+        if ftype in {"bool", "_Bool"}:
+            code.append(f"\tif ((a->{fname} ?1:0) != (b->{fname} ?1:0)) return 0;")
+        else:
+            code.append(f"\tif (a->{fname} != b->{fname}) return 0;")
+        return code
+
+    if is_struct(types, ftype):
+        code.append(f"\tif (!{ftype}_equals(&a->{fname}, &b->{fname})) return 0;")
+        return code
+
+    code.append(f"\t/* Unsupported field type for equals: {ftype} */")
+    return code
+
+
 def emit_struct_impl(types, sname, public_api=False):
     tdef = types[sname]
     fields = tdef.get("fields", [])
-    storage = "void" if public_api else "static void"
+    storage_void = "void" if public_api else "static void"
+    storage_int = "int" if public_api else "static int"
     lines = []
     # to_json
-    lines.append(f"{storage} {sname}_to_json(const {sname} *s, cJSON *obj) {{")
+    lines.append(f"{storage_void} {sname}_to_json(const {sname} *s, cJSON *obj) {{")
     for fld in fields:
         lines.extend(emit_to_json_for_field(types, fld['name'], fld['type']))
     lines.append("}\n")
     # from_json
-    lines.append(f"{storage} {sname}_from_json({sname} *s, const cJSON *obj) {{")
+    lines.append(f"{storage_void} {sname}_from_json({sname} *s, const cJSON *obj) {{")
     for fld in fields:
         lines.extend(emit_from_json_for_field(types, fld['name'], fld['type']))
+    lines.append("}\n")
+    # equals
+    lines.append(f"{storage_int} {sname}_equals(const {sname} *a, const {sname} *b) {{")
+    lines.append("\tif (a == b) return 1;")
+    lines.append("\tif (!a || !b) return 0;")
+    for fld in fields:
+        lines.extend(emit_equals_for_field(types, fld['name'], fld['type']))
+    lines.append("\treturn 1;")
     lines.append("}\n")
     return "\n".join(lines)
 

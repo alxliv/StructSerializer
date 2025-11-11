@@ -362,4 +362,5 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
-/py_helpers/mystruct.json
+/py_helpers/*.json
+/py_helpers/.venv
