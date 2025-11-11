@@ -144,7 +144,7 @@ def main() -> None:
     layout_json = resolve_path(layout_raw, config_dir)
 
     root_struct = cfg.get("generate", "root_struct", fallback=struct_name).strip() or struct_name
-    out_base_default = f"{root_struct}_serial"
+    out_base_default = f"out/{root_struct}_serial"
     out_base_raw = cfg.get("generate", "out_base", fallback=out_base_default).strip() or out_base_default
     out_base = resolve_path(out_base_raw, config_dir)
 
