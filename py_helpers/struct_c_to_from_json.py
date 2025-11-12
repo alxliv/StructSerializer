@@ -147,45 +147,24 @@ def main() -> None:
     if not os.path.isfile(pdb_path):
         raise SystemExit(f"PDB file does not exist: {pdb_path}")
 
-    struct_sections = [section for section in cfg.sections() if section.lower().startswith("struct:")]
-    if not struct_sections:
-        raise SystemExit("Config must define at least one [struct:<name>] section.")
-
-    global_root_override = ""
-    if cfg.has_section("generate"):
-        global_root_override = cfg.get("generate", "root_struct", fallback="").strip()
-
-    global_layout_hint = ""
-    if cfg.has_option("extract", "layout_json"):
-        global_layout_hint = cfg.get("extract", "layout_json").strip()
-
     jobs = []
 
-    for section in struct_sections:
-        try:
-            _, raw_name = section.split(":", 1)
-        except ValueError as exc:
-            raise SystemExit(f"Invalid section name '[{section}]'. Expected format [struct:<name>].") from exc
-        struct_label = raw_name.strip()
-        if not struct_label:
-            raise SystemExit(f"Section '[{section}]' must declare a struct name after 'struct:'.")
-
-        struct_name = cfg.get(section, "struct_name", fallback=struct_label).strip() or struct_label
-
+    structs_str = cfg.get('extract', 'structs')    
+    # Parse comma-separated struct names
+    struct_names_list = [s.strip() for s in structs_str.split(',') if s.strip()]
+    
+    if not struct_names_list:
+        print("Error: No structs specified in config.ini [extract] structs=", file=sys.stderr)
+        sys.exit(1)
+    
+    for struct_name in struct_names_list:
         layout_default = f"{struct_name}.json"
-        layout_raw = cfg.get(section, "layout_json", fallback="").strip()
-        if not layout_raw:
-            layout_raw = global_layout_hint or layout_default
-        layout_json = resolve_path(layout_raw, config_dir)
-
-        root_struct = cfg.get(section, "root_struct", fallback="").strip()
-        if not root_struct:
-            root_struct = global_root_override or struct_name
+        layout_json = resolve_path(layout_default, config_dir)
 
         jobs.append({
             "struct_name": struct_name,
             "layout_json": layout_json,
-            "root_struct": root_struct,
+            "root_struct": "root_struct",
         })
 
     if not jobs:

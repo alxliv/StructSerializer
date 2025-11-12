@@ -8,7 +8,7 @@ and emit a unified JSON suitable for generate_c_wrappers_from_layout.py.
 Usage:
 	python extract_layout.py <pdb_path> <struct_name>
 Example:
-	python extract_layout.py ..\x64\Debug\mytest.pdb myTestStruct > mystruct.json
+	python extract_layout.py ..\x64\\Debug\\mytest.pdb myTestStruct > mystruct.json
 """
 
 import sys
