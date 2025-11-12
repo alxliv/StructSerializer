@@ -41,9 +41,9 @@ B) Minimal single-struct (can pass multiple files to merge):
 }
 
 Usage:
- python generate_c_wrappers.py --root myTestStruct \
+ python generate_c_wrappers.py --root myTestStruct --root OtherStruct \
  --in layout_all.json \
- --out-base myTestStruct_serial
+ --out-base combined_serial
 Example:
  python generate_c_wrappers.py --root myTestStruct --in mystruct.json --out-base myTestStruct_serial
 
@@ -65,8 +65,8 @@ def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--in", dest="inputs", nargs="+", required=True,
                     help="Input JSON file(s) from DIA layout (multi-type or single-struct).")
-    ap.add_argument("--root", required=False,
-                    help="Root struct name (defaults to only struct if unique).")
+    ap.add_argument("--root", dest="roots", action="append",
+                    help="Root struct name (repeat to export multiple roots; defaults to only struct if unique).")
     ap.add_argument("--out-base", default="generated_json",
                     help="Basename for outputs (default: generated_json).")
     return ap.parse_args()
@@ -166,17 +166,24 @@ def collect_struct_dependency_graph(types):
     return graph
 
 
-def topo_order_structs(types, root=None):
+def topo_order_structs(types, roots=None):
     """
     Topologically order structs so that dependencies are emitted first.
-    If root provided, include only those reachable from root.
+    If roots provided, include only those reachable from the specified roots.
     """
     graph = collect_struct_dependency_graph(types)
 
-    # Limit to reachable if root specified
-    if root:
+    roots_list = []
+    if roots:
+        if isinstance(roots, str):
+            roots_list = [roots]
+        else:
+            roots_list = list(roots)
+
+    # Limit to reachable if roots specified
+    if roots_list:
         reachable = set()
-        q = deque([root])
+        q = deque(roots_list)
         while q:
             cur = q.popleft()
             if cur in reachable:
@@ -184,6 +191,11 @@ def topo_order_structs(types, root=None):
             reachable.add(cur)
             for dep in graph.get(cur, []):
                 q.append(dep)
+        # Ensure all roots appear even if they have no dependencies
+        for root_name in roots_list:
+            if root_name in types and types[root_name].get("kind") == "struct":
+                reachable.add(root_name)
+                graph.setdefault(root_name, set())
         # Filter graph to reachable
         graph = {k: {d for d in v if d in reachable} for k, v in graph.items() if k in reachable}
 
@@ -203,10 +215,18 @@ def topo_order_structs(types, root=None):
                 q.append(d)
 
     # There may be structs not in graph (no deps and not referenced)
-    # include them if root is None
-    if root is None:
+    # include them if no roots were provided
+    if not roots_list:
         rest = [k for k in types.keys() if types[k].get("kind") == "struct" and k not in order]
         order.extend(rest)
+
+    if roots_list:
+        root_set = set(roots_list)
+        # Remove roots for reordering
+        non_roots = [s for s in order if s not in root_set]
+        ordered_roots = [r for r in roots_list if r in order]
+        order = non_roots + ordered_roots
+
     return order
 
 
@@ -214,12 +234,15 @@ def gen_decl_name(sname): # function base names
     return sname
 
 
-def emit_header_decls_for_root(root):
+def emit_header_decls_for_roots(roots):
     out = []
-    out.append("/* Auto-generated: public API (root only) */")
-    out.append(f"void {root}_to_json(const {root} *s, cJSON *obj);")
-    out.append(f"void {root}_from_json({root} *s, const cJSON *obj);")
-    out.append(f"int {root}_equals(const {root} *a, const {root} *b);")
+    out.append("/* Auto-generated: public API */")
+    for idx, root in enumerate(roots):
+        out.append(f"void {root}_to_json(const {root} *s, cJSON *obj);")
+        out.append(f"void {root}_from_json({root} *s, const cJSON *obj);")
+        out.append(f"int {root}_equals(const {root} *a, const {root} *b);")
+        if idx != len(roots) -1:
+            out.append("")
     out.append("")
     return "\n".join(out)
 
@@ -370,7 +393,11 @@ def emit_equals_for_field(types, fname, ftype):
         elem, count = array_elem_and_count(ftype)
         code.append(f"\tfor (int i = 0; i < {count}; ++i) {{")
         if is_primitive(elem) or is_enum(types, elem):
-            if elem in {"bool", "_Bool"}:
+            if elem == "float":
+                code.append(f"\t\tif (fabsf(a->{fname}[i] - b->{fname}[i]) > AUTOGEN_FLOAT_EPSILON) return 0;")
+            elif elem == "double":
+                code.append(f"\t\tif (fabs(a->{fname}[i] - b->{fname}[i]) > AUTOGEN_DOUBLE_EPSILON) return 0;")
+            elif elem in {"bool", "_Bool"}:
                 code.append(f"\t\tif ((a->{fname}[i] ?1:0) != (b->{fname}[i] ?1:0)) return 0;")
             else:
                 code.append(f"\t\tif (a->{fname}[i] != b->{fname}[i]) return 0;")
@@ -382,7 +409,11 @@ def emit_equals_for_field(types, fname, ftype):
         return code
 
     if is_primitive(ftype) or is_enum(types, ftype):
-        if ftype in {"bool", "_Bool"}:
+        if ftype == "float":
+            code.append(f"\tif (fabsf(a->{fname} - b->{fname}) > AUTOGEN_FLOAT_EPSILON) return 0;")
+        elif ftype == "double":
+            code.append(f"\tif (fabs(a->{fname} - b->{fname}) > AUTOGEN_DOUBLE_EPSILON) return 0;")
+        elif ftype in {"bool", "_Bool"}:
             code.append(f"\tif ((a->{fname} ?1:0) != (b->{fname} ?1:0)) return 0;")
         else:
             code.append(f"\tif (a->{fname} != b->{fname}) return 0;")
@@ -423,27 +454,44 @@ def emit_struct_impl(types, sname, public_api=False):
     return "\n".join(lines)
 
 
+def emit_struct_prototypes(sname, public_api=False):
+    if public_api:
+        return ""
+    out = []
+    out.append(f"static void {sname}_to_json(const {sname} *s, cJSON *obj);")
+    out.append(f"static void {sname}_from_json({sname} *s, const cJSON *obj);")
+    out.append(f"static int {sname}_equals(const {sname} *a, const {sname} *b);")
+    out.append("")
+    return "\n".join(out)
+
+
 def main():
     args = parse_args()
     types = load_types(args.inputs)
 
-    # determine root
-    root = args.root
-    if not root:
-        # if exactly one struct, use it
+    roots = args.roots or []
+    if not roots:
         structs = [k for k, v in types.items() if v.get("kind") == "struct"]
-        if len(structs) ==1:
-            root = structs[0]
+        if len(structs) == 1:
+            roots = [structs[0]]
         else:
-            raise SystemExit("Please pass --root <StructName> (multiple structs present).")
+            raise SystemExit("Please pass --root <StructName> (repeatable) when multiple structs are present.")
 
-    if root not in types or types[root].get("kind") != "struct":
-        raise SystemExit(f"--root {root} is not a struct present in input types.")
+    dedup_roots = []
+    seen_roots = set()
+    for root in roots:
+        if root not in seen_roots:
+            dedup_roots.append(root)
+            seen_roots.add(root)
+    roots = dedup_roots
+
+    for root in roots:
+        if root not in types or types[root].get("kind") != "struct":
+            raise SystemExit(f"--root {root} is not a struct present in input types.")
 
     # Order structs so nested deps are emitted first (and declared)
-    order = topo_order_structs(types, root=root)
-    # ensure root is last (user expects the root at end)
-    order = [s for s in order if s != root] + [root]
+    order = topo_order_structs(types, roots=roots)
+    root_set = set(roots)
 
     base = args.out_base
     h_path = f"{base}.h"
@@ -464,8 +512,8 @@ def main():
     h.append('#endif')
     h.append("")
 
-    # Only public API for root
-    h.append(emit_header_decls_for_root(root))
+    # Only public API for requested roots
+    h.append(emit_header_decls_for_roots(roots))
     h.append('#ifdef __cplusplus')
     h.append('} /* extern "C" */')
     h.append('#endif')
@@ -477,9 +525,27 @@ def main():
     c = []
     c.append("/* Auto-generated by generate_c_wrappers_from_layout.py */")
     c.append(f'#include "{os.path.basename(h_path)}"')
+    c.append("#include <math.h>")
     c.append("")
+    c.append("#ifndef AUTOGEN_FLOAT_EPSILON")
+    c.append("#define AUTOGEN_FLOAT_EPSILON 1e-6f")
+    c.append("#endif")
+    c.append("#ifndef AUTOGEN_DOUBLE_EPSILON")
+    c.append("#define AUTOGEN_DOUBLE_EPSILON 1e-9")
+    c.append("#endif")
+    c.append("")
+
+    prototypes = []
     for sname in order:
-        c.append(emit_struct_impl(types, sname, public_api=(sname == root)))
+        proto = emit_struct_prototypes(sname, public_api=(sname in root_set))
+        if proto:
+            prototypes.append(proto)
+    if prototypes:
+        c.append("/* Forward declarations for static helpers */")
+        c.extend(prototypes)
+
+    for sname in order:
+        c.append(emit_struct_impl(types, sname, public_api=(sname in root_set)))
 
     with open(c_path, "w", encoding="utf-8") as fc:
         fc.write("\n".join(c) + "\n")

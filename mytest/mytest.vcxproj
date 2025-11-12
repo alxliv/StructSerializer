@@ -128,17 +128,12 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="..\cJSON\cJSON.c" />
-    <ClCompile Include="..\py_helpers\out\myTestStruct_serial.c">
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">false</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
-      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</ExcludedFromBuild>
-    </ClCompile>
+    <ClCompile Include="..\py_helpers\out\autogen_to_from_json.c" />
     <ClCompile Include="mytest.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\cJSON\cJSON.h" />
-    <ClInclude Include="..\py_helpers\out\myTestStruct_serial.h" />
+    <ClInclude Include="..\py_helpers\out\autogen_to_from_json.h" />
     <ClInclude Include="mytypes.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

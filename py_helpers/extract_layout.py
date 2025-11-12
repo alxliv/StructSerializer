@@ -94,7 +94,15 @@ def basic_type_name(sym):
 	try:
 		bt = sym.baseType
 		if bt in BT_MAP:
-			return BT_MAP[bt]
+			name = BT_MAP[bt]
+			if name == "float":
+				try:
+					length = getattr(sym, "length", None)
+				except Exception:
+					length = None
+				if length == 8:
+					return "double"
+			return name
 	except Exception:
 		pass
 	try:

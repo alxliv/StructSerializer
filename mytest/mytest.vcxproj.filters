@@ -21,7 +21,7 @@
     <ClCompile Include="..\cJSON\cJSON.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\py_helpers\out\myTestStruct_serial.c">
+    <ClCompile Include="..\py_helpers\out\autogen_to_from_json.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -32,7 +32,7 @@
     <ClInclude Include="..\cJSON\cJSON.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\py_helpers\out\myTestStruct_serial.h">
+    <ClInclude Include="..\py_helpers\out\autogen_to_from_json.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

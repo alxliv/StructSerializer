@@ -10,14 +10,20 @@ Expected config layout:
 
     [extract]
     pdb_path = ..\\x64\\Debug\\mytest.pdb
-    struct_name = myTestStruct
-    layout_json = mystruct.json        ; optional, defaults to <struct>.json
 
-    [generate]
-    out_base = out/myTestStruct_serial ; optional, defaults to <struct>_serial
-    root_struct = myTestStruct         ; optional, defaults to struct_name
+    [struct:myTestStruct]
+    layout_json = layouts\\myTestStruct.json        ; optional, defaults to <struct>.json
+    root_struct = myTestStruct                       ; optional, defaults to section name
+
+    [struct:AnotherStruct]
+    layout_json = layouts\\AnotherStruct.json
+    root_struct = AnotherStruct
 
 All relative paths are resolved relative to the location of the config file.
+
+Generated files are always written to:
+    out/autogen_to_from_json.c
+    out/autogen_to_from_json.h
 """
 
 import argparse
@@ -25,7 +31,11 @@ import configparser
 import os
 import subprocess
 import sys
-from typing import Optional
+from typing import List, Set
+
+AUTOGEN_BASE = os.path.join("out", "autogen_to_from_json")
+AUTOGEN_C_FILENAME = "autogen_to_from_json.c"
+AUTOGEN_H_FILENAME = "autogen_to_from_json.h"
 
 
 def parse_args() -> argparse.Namespace:
@@ -102,24 +112,23 @@ def run_extract(
 def run_generate(
     python_exe: str,
     script_path: str,
-    layout_json: str,
-    root_struct: str,
+    layout_jsons: List[str],
+    root_structs: List[str],
     out_base: str,
 ) -> None:
-    print(f"[generate] Emitting wrappers for root struct '{root_struct}' using {layout_json}")
+    if not layout_jsons or not root_structs:
+        raise SystemExit("Generation requires at least one layout JSON and one root struct name.")
+    print(
+        f"[generate] Emitting wrappers for {len(root_structs)} struct(s) using {len(layout_jsons)} layout file(s)"
+    )
     out_dir = os.path.dirname(out_base)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    cmd = [
-        python_exe,
-        script_path,
-        "--in",
-        layout_json,
-        "--root",
-        root_struct,
-        "--out-base",
-        out_base,
-    ]
+    cmd = [python_exe, script_path, "--in"]
+    cmd.extend(layout_jsons)
+    for root_struct in root_structs:
+        cmd.extend(["--root", root_struct])
+    cmd.extend(["--out-base", out_base])
     try:
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as exc:
@@ -133,20 +142,54 @@ def main() -> None:
     cfg = load_config(config_path)
     config_dir = os.path.dirname(config_path)
 
-    struct_name = require_option(cfg, "extract", "struct_name")
     pdb_path_raw = require_option(cfg, "extract", "pdb_path")
     pdb_path = resolve_path(pdb_path_raw, config_dir)
     if not os.path.isfile(pdb_path):
         raise SystemExit(f"PDB file does not exist: {pdb_path}")
 
-    layout_default = f"{struct_name}.json"
-    layout_raw = cfg.get("extract", "layout_json", fallback=layout_default).strip() or layout_default
-    layout_json = resolve_path(layout_raw, config_dir)
+    struct_sections = [section for section in cfg.sections() if section.lower().startswith("struct:")]
+    if not struct_sections:
+        raise SystemExit("Config must define at least one [struct:<name>] section.")
 
-    root_struct = cfg.get("generate", "root_struct", fallback=struct_name).strip() or struct_name
-    out_base_default = f"out/{root_struct}_serial"
-    out_base_raw = cfg.get("generate", "out_base", fallback=out_base_default).strip() or out_base_default
-    out_base = resolve_path(out_base_raw, config_dir)
+    global_root_override = ""
+    if cfg.has_section("generate"):
+        global_root_override = cfg.get("generate", "root_struct", fallback="").strip()
+
+    global_layout_hint = ""
+    if cfg.has_option("extract", "layout_json"):
+        global_layout_hint = cfg.get("extract", "layout_json").strip()
+
+    jobs = []
+
+    for section in struct_sections:
+        try:
+            _, raw_name = section.split(":", 1)
+        except ValueError as exc:
+            raise SystemExit(f"Invalid section name '[{section}]'. Expected format [struct:<name>].") from exc
+        struct_label = raw_name.strip()
+        if not struct_label:
+            raise SystemExit(f"Section '[{section}]' must declare a struct name after 'struct:'.")
+
+        struct_name = cfg.get(section, "struct_name", fallback=struct_label).strip() or struct_label
+
+        layout_default = f"{struct_name}.json"
+        layout_raw = cfg.get(section, "layout_json", fallback="").strip()
+        if not layout_raw:
+            layout_raw = global_layout_hint or layout_default
+        layout_json = resolve_path(layout_raw, config_dir)
+
+        root_struct = cfg.get(section, "root_struct", fallback="").strip()
+        if not root_struct:
+            root_struct = global_root_override or struct_name
+
+        jobs.append({
+            "struct_name": struct_name,
+            "layout_json": layout_json,
+            "root_struct": root_struct,
+        })
+
+    if not jobs:
+        raise SystemExit("No struct definitions resolved from config. Check [struct:<name>] sections.")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     extract_script = os.path.join(script_dir, "extract_layout.py")
@@ -155,9 +198,42 @@ def main() -> None:
         if not os.path.isfile(script):
             raise SystemExit(f"Required helper script not found: {script}")
 
-    run_extract(args.python_exe, extract_script, pdb_path, struct_name, layout_json)
-    run_generate(args.python_exe, generate_script, layout_json, root_struct, out_base)
-    print("[done] Struct serialization helpers generated successfully.")
+    for job in jobs:
+        run_extract(args.python_exe, extract_script, pdb_path, job["struct_name"], job["layout_json"])
+
+    layout_jsons = [job["layout_json"] for job in jobs]
+    root_structs: List[str] = []
+    seen_roots: Set[str] = set()
+    for job in jobs:
+        root_struct = job["root_struct"]
+        if root_struct not in seen_roots:
+            seen_roots.add(root_struct)
+            root_structs.append(root_struct)
+
+    out_base = resolve_path(AUTOGEN_BASE, config_dir)
+    run_generate(args.python_exe, generate_script, layout_jsons, root_structs, out_base)
+
+    generated_c = f"{out_base}.c"
+    generated_h = f"{out_base}.h"
+    if not os.path.isfile(generated_c) or not os.path.isfile(generated_h):
+        raise SystemExit("Expected generated files were not produced by generate_c_wrappers.py")
+    out_dir = os.path.dirname(out_base)
+    final_c = os.path.join(out_dir, AUTOGEN_C_FILENAME)
+    final_h = os.path.join(out_dir, AUTOGEN_H_FILENAME)
+
+    if generated_c != final_c:
+        if os.path.isfile(final_c):
+            os.remove(final_c)
+        os.replace(generated_c, final_c)
+
+    if generated_h != final_h:
+        if os.path.isfile(final_h):
+            os.remove(final_h)
+        os.replace(generated_h, final_h)
+
+    print(
+        f"[done] Generated wrappers for {len(root_structs)} struct(s): {final_c} / {final_h}"
+    )
 
 
 if __name__ == "__main__":
