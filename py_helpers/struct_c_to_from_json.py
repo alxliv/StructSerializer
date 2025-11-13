@@ -113,22 +113,24 @@ def run_generate(
     python_exe: str,
     script_path: str,
     layout_jsons: List[str],
-    root_structs: List[str],
     out_base: str,
 ) -> None:
-    if not layout_jsons or not root_structs:
+    if not layout_jsons:
         raise SystemExit("Generation requires at least one layout JSON and one root struct name.")
     print(
-        f"[generate] Emitting wrappers for {len(root_structs)} struct(s) using {len(layout_jsons)} layout file(s)"
+        f"[generate] Emitting wrappers for {len(layout_jsons)} struct(s)"
     )
     out_dir = os.path.dirname(out_base)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
     cmd = [python_exe, script_path, "--in"]
     cmd.extend(layout_jsons)
-    for root_struct in root_structs:
+
+    for layout_json in layout_jsons:
+        root_struct = os.path.splitext(os.path.basename(layout_json))[0]
         cmd.extend(["--root", root_struct])
     cmd.extend(["--out-base", out_base])
+
     try:
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as exc:
@@ -149,22 +151,22 @@ def main() -> None:
 
     jobs = []
 
-    structs_str = cfg.get('extract', 'structs')    
+    structs_str = cfg.get('extract', 'structs')
     # Parse comma-separated struct names
-    struct_names_list = [s.strip() for s in structs_str.split(',') if s.strip()]
-    
+    struct_names = [s.strip() for s in structs_str.split(',') if s.strip()]
+    # dict.fromkeys preserves order while removing duplicates
+    struct_names_list = list(dict.fromkeys(struct_names))
+
     if not struct_names_list:
         print("Error: No structs specified in config.ini [extract] structs=", file=sys.stderr)
         sys.exit(1)
-    
+
     for struct_name in struct_names_list:
         layout_default = f"{struct_name}.json"
         layout_json = resolve_path(layout_default, config_dir)
-
         jobs.append({
             "struct_name": struct_name,
-            "layout_json": layout_json,
-            "root_struct": "root_struct",
+            "layout_json": layout_json
         })
 
     if not jobs:
@@ -176,21 +178,13 @@ def main() -> None:
     for script in (extract_script, generate_script):
         if not os.path.isfile(script):
             raise SystemExit(f"Required helper script not found: {script}")
-
+    layout_jsons = []
     for job in jobs:
         run_extract(args.python_exe, extract_script, pdb_path, job["struct_name"], job["layout_json"])
-
-    layout_jsons = [job["layout_json"] for job in jobs]
-    root_structs: List[str] = []
-    seen_roots: Set[str] = set()
-    for job in jobs:
-        root_struct = job["root_struct"]
-        if root_struct not in seen_roots:
-            seen_roots.add(root_struct)
-            root_structs.append(root_struct)
+        layout_jsons.append(job["layout_json"])
 
     out_base = resolve_path(AUTOGEN_BASE, config_dir)
-    run_generate(args.python_exe, generate_script, layout_jsons, root_structs, out_base)
+    run_generate(args.python_exe, generate_script, layout_jsons, out_base)
 
     generated_c = f"{out_base}.c"
     generated_h = f"{out_base}.h"
@@ -210,9 +204,7 @@ def main() -> None:
             os.remove(final_h)
         os.replace(generated_h, final_h)
 
-    print(
-        f"[done] Generated wrappers for {len(root_structs)} struct(s): {final_c} / {final_h}"
-    )
+    print(f"[done] Generated wrappers for {len(layout_jsons)} struct(s): {final_c} / {final_h}")
 
 
 if __name__ == "__main__":
