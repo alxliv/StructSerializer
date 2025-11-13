@@ -1,9 +1,7 @@
-// mytest.cpp : This file contains the 'main' function. Program execution begins and ends there.
-//
 
-#include <iostream>
-#include <cassert>
-#include <cmath>
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
 #include "mytypes.h"
 #include "..\py_helpers/out/autogen_to_from_json.h"
 

@@ -1,9 +1,10 @@
 # StructSerializer
 
-Automatically generates JSON serialization/deserialization C code from PDB debug symbols.
+Python script (**struct_c_to_from_json.py**) that automatically generates JSON serialization/deserialization C code from PDB debug symbols.
+
 ## Overview
 
-StructSerializer extracts C++ struct layout information from PDB files using the Debug Interface Access (DIA) SDK and generates type-safe C serialization wrappers that work with the [cJSON](https://github.com/DaveGamble/cJSON) library. This eliminates the need to manually write tedious serialization code for complex nested structures.
+**struct_c_to_from_json.py** extracts C/C++ struct layout information from PDB files using the Debug Interface Access (DIA) SDK and generates type-safe C serialization wrappers that work with the [cJSON](https://github.com/DaveGamble/cJSON) library. This eliminates the need to manually write tedious serialization code for complex nested structures.
 
 ## Features
 
@@ -11,8 +12,6 @@ StructSerializer extracts C++ struct layout information from PDB files using the
 - **Full Type Support** - Handles primitives, arrays, nested structs, enums, and pointers
 - **Dependency Resolution** - Automatically includes all dependent types in topological order
 - **Type-Safe Generation** - Generates strongly-typed C functions for each struct
-- **Multi-Format JSON Input** - Supports both single-struct and multi-type JSON formats
-- **Encoding-Aware** - Automatically detects and handles UTF-8, UTF-16, and UTF-32 encoded files
 
 ## Project structure
 
@@ -26,9 +25,20 @@ StructSerializer/
 └─ README.md
 ```
 
+## Prerequisites
+
+### Python Dependencies
+- Python3.6+ (I tested with 3.11.9)
+- `pydia2` - DIA SDK Python bindings for PDB parsing
+
+Install with:
+```bash
+pip install pydia2
+```
+
 ## Quick Start
 
-1) Build your project with debug symbols to produce a PDB (Visual Studio: /Zi, Debug configuration).
+1) Build your C/C++ project with debug symbols to produce a PDB file (Visual Studio: /Zi, Debug configuration).
 
 ```bash
 cl /Zi /EHsc myproject\your_file.cpp /Fe:app.exe
@@ -39,115 +49,165 @@ cl /Zi /EHsc myproject\your_file.cpp /Fe:app.exe
 ```ini
 [extract]
 pdb_path = ..\\x64\\Debug\\mytest.pdb      ; MSVC-generated PDB
-structs = MyTestStruct, AnotherTestStruct   ; Comma-separated list of root structs
+structs = myTestStruct, AnotherTestStruct   ; Comma-separated list of root structs
 
-[generator]
-# Optional
-encoding = auto                       ; auto, utf-8, utf-16, utf-32
-emit_helpers = true                   ; emit small helper utilities
-pretty_print = true                   ; formatting hints for generated C
-
-[c]
-header_guard = AUTOGEN_TO_FROM_JSON_H ; custom include guard
-include_cjson = cJSON.h               ; header name/path for cJSON
-fn_prefix =                           ; prefix for generated functions (e.g., ss_)
 ```
 
-3) Run the orchestrator (it will extract from PDB and generate code in one step):
+3) Run the orchestrator (it will read config.ini and extract from PDB and generate code in one step):
 
 ```bash
-python py_helpers\struct_c_to_from_json.py --config py_helpers\config.ini
+cd py_helpers
+python struct_c_to_from_json.py
 ```
 
-This generates:
+This generates in *out* folder:
 - autogen_to_from_json.h
 - autogen_to_from_json.c
 
 4) Use generated code:
-```c
-#include "autogen_to_from_json.h"
-#include <cjson/cJSON.h>
-#include <stdio.h>
 
-int main(void) {
-    myTestStruct s = {0};
-    // ... populate s ...
-    cJSON* obj = cJSON_CreateObject();
-    myTestStruct_to_json(&s, obj);
-    char* text = cJSON_PrintUnformatted(obj);
-    puts(text);
+**mytypes.h**
+```h
+#pragma once
 
-    myTestStruct s2 = {0};
-    cJSON* parsed = cJSON_Parse(text);
-    myTestStruct_from_json(&s2, parsed);
+typedef enum {
+    COLOR_RED,
+    COLOR_GREEN,
+    COLOR_BLUE
+} Color;
 
-    cJSON_Delete(parsed);
-    cJSON_Delete(obj);
-    free(text);
-    return 0;
-}
+typedef struct {
+    float x;
+    float y;
+} Point;
+
+typedef struct {
+    double width;
+    double height;
+} Size;
+
+typedef struct {
+    Point origin;
+    Size size;
+} Rect;
+
+typedef struct {
+    Point center;
+    Size bounding;
+    Color color;
+    float values[5];
+} myTestStruct;
+
+typedef struct {
+    unsigned int status;
+    char flags;
+    Size tt_size;
+} SomeTT;
+
+#define NUM_POINTS (4)
+typedef struct {
+    Point center;
+    Size bounding;
+    Color color;
+    SomeTT some_tt;
+    Point points[NUM_POINTS];
+} AnotherTestStruct;
+
 ```
 
-## Usage
+**mytest.cpp**
+```c
 
-- Run with config file (orchestrates extraction + generation):
-  - python py_helpers\struct_c_to_from_json.py --config py_helpers\config.ini
-- Override config on command line:
-  - python py_helpers\struct_c_to_from_json.py --config config.ini --pdb path\to\app.pdb --root RootType
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+#include "mytypes.h"
+#include "..\py_helpers/out/autogen_to_from_json.h"
 
-Outputs (always):
-- autogen_to_from_json.h
-- autogen_to_from_json.c
 
-## Supported types
+int main()
+{
+    myTestStruct s;
+    s.center.x = 1.0f;
+    s.center.y = 2.0f;
+    s.bounding.width = 3.0;
+    s.bounding.height = 4.0;
+    s.color = COLOR_GREEN;
+    s.values[0] = 0.1f;
+    s.values[1] = 0.2f;
+    s.values[2] = 0.3f;
+    s.values[3] = 0.4f;
+    s.values[4] = 0.5f;
 
-- Primitives: int, unsigned, float, double, bool/_Bool
-- Enums: serialized as underlying integer
-- Arrays: T[N]
-- Structs: nested structs (recursive)
-- Strings:
-  - char[N]: emitted as string (truncated at first '\0')
-  - char*: pointer treated as string (assumed UTF-8)
-- Unsupported: unions, function pointers, arbitrary non-char pointers
+    AnotherTestStruct another;
+    another.bounding = { 1.34, 5.67 };
+    another.center = { 6.78f, 9.0f };
+    another.color = COLOR_BLUE;
+    another.points[0] = { 1,2 };
+    another.points[1] = { 3,4 };
+    another.points[2] = { 5,6 };
+    another.points[3] = { 7,8 };
 
-Notes:
-- Bitfields may be exposed as underlying integral storage if present in the input.
-- Only fixed-size arrays supported (no VLA).
+    another.some_tt.flags = 0x34;
+    another.some_tt.status = 0xabcd;
+    another.some_tt.tt_size = { 0.3,0.6 };
 
-## Requirements
 
-- Windows with Visual Studio 2015+ (to produce PDBs with /Zi)
-- Python 3.6+
-- pydia2 (DIA bindings) for extract_layout.py: pip install pydia2
-- cJSON available to your C build (add cJSON.c to your project, include cJSON.h)
+#if 1
+    cJSON* root = cJSON_CreateObject();
 
-## config.ini reference
+    // Serialize myTestStruct under its own key
+    {
+        cJSON* s_obj = cJSON_CreateObject();
+        myTestStruct_to_json(&s, s_obj);
+        cJSON_AddItemToObject(root, "myTestStruct", s_obj);
+    }
 
-[extract]
-- pdb_path: Path to the MSVC-generated PDB (string, required)
-- structs: Comma-separated list of root struct names (string, required)
+    // Serialize AnotherTestStruct under its own key
+    {
+        cJSON* a_obj = cJSON_CreateObject();
+        AnotherTestStruct_to_json(&another, a_obj);
+        cJSON_AddItemToObject(root, "AnotherTestStruct", a_obj);
+    }
 
-[generator]
-- encoding: auto|utf-8|utf-16|utf-32 (optional, default auto)
-- emit_helpers: true|false (optional)
-- pretty_print: true|false (optional)
+    char* json_str = cJSON_Print(root);
+    printf("%s\n", json_str);
 
-[c]
-- header_guard: Custom guard (optional; default: AUTOGEN_TO_FROM_JSON_H)
-- include_cjson: Header to include for cJSON (default: cJSON.h)
-- fn_prefix: Prefix for all generated function names (optional)
+    cJSON* parsed = cJSON_Parse(json_str);
 
-## Troubleshooting
+    myTestStruct s2 = { 0 };
+    {
+        const cJSON* s_obj = cJSON_GetObjectItem(parsed, "myTestStruct");
+        assert(s_obj && cJSON_IsObject(s_obj));
+        myTestStruct_from_json(&s2, s_obj);
+    }
 
-- PDB/DIA load issues: Ensure matching bitness (x64 Python for x64 PDB), install VS “C++ profiling tools / Windows SDK / DIA SDK” components, and verify the PDB path is correct.
-- Missing types in output JSON: Confirm the correct root struct names and that the PDB was built from sources that define them (clean/rebuild with /Zi).
-- Mismatched field offsets/sizes: Regenerate the type JSON to match current headers.
-- Encoding errors: Set encoding in config.ini or save JSON files in UTF-8.
-- Duplicate type names across files: Merge or ensure consistent definitions before generation.
+    AnotherTestStruct a2 = { 0 };
+    {
+        const cJSON* a_obj = cJSON_GetObjectItem(parsed, "AnotherTestStruct");
+        assert(a_obj && cJSON_IsObject(a_obj));
+        AnotherTestStruct_from_json(&a2, a_obj);
+    }
+
+    cJSON_Delete(root);
+    cJSON_Delete(parsed);
+    free(json_str);
+
+    assert(myTestStruct_equals(&s, &s2));
+    assert(AnotherTestStruct_equals(&another, &a2));
+#endif
+
+    printf("all done OK\n");
+    return 0;
+}
+
+
+```
+
 
 ## License
 
-Provided as-is for educational and commercial use.
+This project is licensed under the [MIT License](LICENSE).
 
 ---
 
